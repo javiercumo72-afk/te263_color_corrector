@@ -72,6 +72,10 @@ RIGHT_LABELS = ["10", "09", "03", "02", "01", "C7", "B7", "A7", "C8", "B8", "A8"
 ALL_LABELS = LEFT_LABELS + RIGHT_LABELS
 NEUTRAL_LABELS = ["20", "18", "17", "16", "11", "10", "09", "03", "02", "01"]
 SUPPORTED_EXTENSIONS = {".tif", ".tiff", ".jpg", ".jpeg", ".png"}
+PATCH_TEMPLATE_CHART_WIDTH = 2500.0
+PATCH_TEMPLATE_LEFT_MARGIN = 100.0
+PATCH_TEMPLATE_RIGHT_MARGIN = 112.0
+PATCH_TEMPLATE_WIDTH = 70.0
 
 
 @dataclass(frozen=True)
@@ -234,20 +238,19 @@ def find_light_chart_bounds(chart_rgb: np.ndarray) -> Tuple[int, int, int, int]:
     img8 = as_uint8_rgb(chart_rgb)
     gray = cv2.cvtColor(img8, cv2.COLOR_RGB2GRAY)
     mask = (gray > 105).astype(np.uint8) * 255
-    kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (51, 9))
-    mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel, iterations=1)
-    contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
     h, w = gray.shape[:2]
 
-    boxes = []
-    for cnt in contours:
-        x, y, bw, bh = cv2.boundingRect(cnt)
-        if bw > w * 0.70 and bh > h * 0.45:
-            boxes.append((cv2.contourArea(cnt), x, y, bw, bh))
-    if not boxes:
+    col_score = smooth_1d((mask > 0).mean(axis=0), 31)
+    row_score = smooth_1d((mask > 0).mean(axis=1), 9)
+    col_intervals = intervals_from_mask(col_score > 0.46, min_width=max(200, int(w * 0.35)))
+    row_intervals = intervals_from_mask(row_score > 0.40, min_width=max(50, int(h * 0.35)))
+    if not col_intervals or not row_intervals:
         return 0, 0, w, h
-    _, x, y, bw, bh = max(boxes, key=lambda item: item[0])
-    return x, y, bw, bh
+
+    x0 = min(item[0] for item in col_intervals)
+    x1 = max(item[1] for item in col_intervals)
+    y0, y1 = max(row_intervals, key=lambda item: item[1] - item[0])
+    return x0, y0, x1 - x0 + 1, y1 - y0 + 1
 
 
 def detect_arrow_in_side(chart_rgb: np.ndarray, side: str) -> Tuple[int, int, int, int, float] | None:
@@ -556,6 +559,30 @@ def detect_patch_group_edges(inner_rgb: np.ndarray, y0: int, y1: int) -> Tuple[T
     return left, right
 
 
+def template_patch_x_positions(chart_left: int, chart_width: int) -> Dict[str, Tuple[float, float]]:
+    """
+    Posiciones horizontales de medicion en la carta rectificada.
+
+    La plantilla usa mediciones sobre la vista canonica de 2500 px:
+    C1 empieza a 100 px del borde izquierdo, cada parche mide 70 px, y
+    B9 termina a 112 px del borde derecho. Dentro de cada grupo los
+    parches se tratan como celdas consecutivas de 70 px.
+    """
+    scale = chart_width / PATCH_TEMPLATE_CHART_WIDTH
+    patch_w = PATCH_TEMPLATE_WIDTH * scale
+    left_start = chart_left + PATCH_TEMPLATE_LEFT_MARGIN * scale
+    right_last_start = chart_left + chart_width - (PATCH_TEMPLATE_RIGHT_MARGIN + PATCH_TEMPLATE_WIDTH) * scale
+
+    positions: Dict[str, Tuple[float, float]] = {}
+    for i, label in enumerate(LEFT_LABELS):
+        x0 = left_start + i * patch_w
+        positions[label] = (x0, x0 + patch_w)
+    for i, label in enumerate(RIGHT_LABELS):
+        x0 = right_last_start - (len(RIGHT_LABELS) - 1 - i) * patch_w
+        positions[label] = (x0, x0 + patch_w)
+    return positions
+
+
 def generate_patch_rois_auto(chart_rgb: np.ndarray) -> Dict[str, Tuple[float, float, float, float]]:
     """
     Calcula ROIs normalizadas de los 26 parches. No usa posiciones fijas crudas;
@@ -564,54 +591,26 @@ def generate_patch_rois_auto(chart_rgb: np.ndarray) -> Dict[str, Tuple[float, fl
     """
     chart_h, chart_w = chart_rgb.shape[:2]
     ix, iy, iw, ih = find_inner_chart_box(chart_rgb)
+    chart_x, _chart_y, chart_box_w, _chart_box_h = find_light_chart_bounds(chart_rgb)
     inner = chart_rgb[iy:iy + ih, ix:ix + iw]
 
     py0, py1 = detect_patch_band(inner)
-    anchors = detect_chart_arrows(chart_rgb)
-    if anchors is not None:
-        left_x, _ = anchors.left_center
-        right_x, _ = anchors.right_center
-        span = right_x - left_x
-        left = (
-            int(round(left_x + span * 0.095 - ix)),
-            int(round(left_x + span * 0.455 - ix)),
-        )
-        right = (
-            int(round(left_x + span * 0.596 - ix)),
-            int(round(left_x + span * 0.938 - ix)),
-        )
-        left = (max(0, left[0]), min(iw - 1, left[1]))
-        right = (max(0, right[0]), min(iw - 1, right[1]))
-    else:
-        left, right = detect_patch_group_edges(inner, py0, py1)
+    patch_x_positions = template_patch_x_positions(chart_x, chart_box_w)
 
     # Las mediciones usan solo el centro del parche, lejos de bordes, texto y sombras.
     rois: Dict[str, Tuple[float, float, float, float]] = {}
 
-    def add_group(labels: List[str], x_start: int, x_end: int, shrink_x: float) -> None:
-        n = len(labels)
-        width = float(x_end - x_start + 1)
-        patch_w = width / n
-        # recortar un poco verticalmente dentro de la banda detectada
-        y_margin = 0.22 * (py1 - py0 + 1)
-        yy0 = iy + py0 + y_margin
-        yy1 = iy + py1 - y_margin
-
-        for i, label in enumerate(labels):
-            px0 = x_start + i * patch_w
-            px1 = x_start + (i + 1) * patch_w
-            x_margin = shrink_x * patch_w
-            xx0 = ix + px0 + x_margin
-            xx1 = ix + px1 - x_margin
-            rois[label] = (
-                max(0.0, xx0 / chart_w),
-                max(0.0, yy0 / chart_h),
-                min(1.0, xx1 / chart_w),
-                min(1.0, yy1 / chart_h),
-            )
-
-    add_group(LEFT_LABELS, left[0], left[1], shrink_x=0.30)
-    add_group(RIGHT_LABELS, right[0], right[1], shrink_x=0.33)
+    y_margin = 0.22 * (py1 - py0 + 1)
+    yy0 = iy + py0 + y_margin
+    yy1 = iy + py1 - y_margin
+    for label in ALL_LABELS:
+        xx0, xx1 = patch_x_positions[label]
+        rois[label] = (
+            max(0.0, xx0 / chart_w),
+            max(0.0, yy0 / chart_h),
+            min(1.0, xx1 / chart_w),
+            min(1.0, yy1 / chart_h),
+        )
     return rois
 
 

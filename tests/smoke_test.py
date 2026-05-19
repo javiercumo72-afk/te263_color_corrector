@@ -15,11 +15,16 @@ sys.path.insert(0, str(SRC_DIR))
 from te263_color_corrector.calibrator import (  # noqa: E402
     ALL_LABELS,
     LEFT_LABELS,
+    PATCH_TEMPLATE_CHART_WIDTH,
+    PATCH_TEMPLATE_LEFT_MARGIN,
+    PATCH_TEMPLATE_RIGHT_MARGIN,
+    PATCH_TEMPLATE_WIDTH,
     REFERENCE_LAB,
     RIGHT_LABELS,
     iter_images,
     lab_to_srgb,
     process_one,
+    template_patch_x_positions,
 )
 
 
@@ -77,8 +82,14 @@ def create_synthetic_input(path: Path) -> None:
     _draw_arrow(image, chart_x + 45, chart_y + 15, scale=1)
     _draw_arrow(image, chart_x + chart_w - 45, chart_y + 15, scale=1)
 
-    _draw_group(image, LEFT_LABELS, chart_x, chart_y, chart_w, chart_h, 0.041, 0.413)
-    _draw_group(image, RIGHT_LABELS, chart_x, chart_y, chart_w, chart_h, 0.566, 0.963)
+    left_start = PATCH_TEMPLATE_LEFT_MARGIN / PATCH_TEMPLATE_CHART_WIDTH
+    left_end = (PATCH_TEMPLATE_LEFT_MARGIN + len(LEFT_LABELS) * PATCH_TEMPLATE_WIDTH) / PATCH_TEMPLATE_CHART_WIDTH
+    right_start = (
+        PATCH_TEMPLATE_CHART_WIDTH - PATCH_TEMPLATE_RIGHT_MARGIN - len(RIGHT_LABELS) * PATCH_TEMPLATE_WIDTH
+    ) / PATCH_TEMPLATE_CHART_WIDTH
+    right_end = (PATCH_TEMPLATE_CHART_WIDTH - PATCH_TEMPLATE_RIGHT_MARGIN) / PATCH_TEMPLATE_CHART_WIDTH
+    _draw_group(image, LEFT_LABELS, chart_x, chart_y, chart_w, chart_h, left_start, left_end)
+    _draw_group(image, RIGHT_LABELS, chart_x, chart_y, chart_w, chart_h, right_start, right_end)
 
     path.parent.mkdir(parents=True, exist_ok=True)
     Image.fromarray(image).save(path, compression="tiff_lzw", dpi=(300, 300))
@@ -104,12 +115,23 @@ def check_iter_images(run_dir: Path) -> None:
         raise AssertionError(f"Unexpected recursive images: {recursive}")
 
 
+def check_template_patch_positions() -> None:
+    positions = template_patch_x_positions(0, 2500)
+    if positions["C1"] != (100.0, 170.0):
+        raise AssertionError(f"Unexpected C1 position: {positions['C1']}")
+    if positions["B1"] != (170.0, 240.0):
+        raise AssertionError(f"Unexpected B1 position: {positions['B1']}")
+    if positions["B9"] != (2318.0, 2388.0):
+        raise AssertionError(f"Unexpected B9 position: {positions['B9']}")
+
+
 def main() -> None:
     run_dir = PROJECT_ROOT / "test_runs" / "smoke"
     input_path = run_dir / "synthetic_te263_input.tif"
     output_path = run_dir / "synthetic_te263_output.tif"
 
     check_iter_images(run_dir)
+    check_template_patch_positions()
     create_synthetic_input(input_path)
     process_one(input_path, output_path, mode="hybrid", strength=1.0, debug=True)
 
