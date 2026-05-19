@@ -72,10 +72,12 @@ RIGHT_LABELS = ["10", "09", "03", "02", "01", "C7", "B7", "A7", "C8", "B8", "A8"
 ALL_LABELS = LEFT_LABELS + RIGHT_LABELS
 NEUTRAL_LABELS = ["20", "18", "17", "16", "11", "10", "09", "03", "02", "01"]
 SUPPORTED_EXTENSIONS = {".tif", ".tiff", ".jpg", ".jpeg", ".png"}
-PATCH_TEMPLATE_CHART_WIDTH = 2500.0
-PATCH_TEMPLATE_LEFT_MARGIN = 100.0
-PATCH_TEMPLATE_RIGHT_MARGIN = 112.0
-PATCH_TEMPLATE_WIDTH = 70.0
+TARGET_DPI = (300.0, 300.0)
+PATCH_TEMPLATE_LT = 2345.0
+PATCH_TEMPLATE_P1 = 100.0
+PATCH_TEMPLATE_LEFT_GROUP_WIDTH = 890.0
+PATCH_TEMPLATE_P2 = 1362.0
+PATCH_TEMPLATE_RIGHT_GROUP_WIDTH = 880.0
 
 
 @dataclass(frozen=True)
@@ -182,6 +184,28 @@ def get_dpi(path: Path) -> Tuple[float, float]:
 def save_tiff_lzw(path: Path, img_rgb: np.ndarray, dpi: Tuple[float, float]) -> None:
     # Pillow soporta TIFF-LZW sin imagecodecs.
     Image.fromarray(img_rgb).save(path, compression="tiff_lzw", dpi=dpi)
+
+
+def normalize_image_to_dpi(
+    img_rgb: np.ndarray,
+    dpi: Tuple[float, float],
+    target_dpi: Tuple[float, float] = TARGET_DPI,
+) -> Tuple[np.ndarray, Tuple[float, float]]:
+    dpi_x, dpi_y = dpi
+    target_x, target_y = target_dpi
+    if dpi_x <= 0 or dpi_y <= 0:
+        dpi_x, dpi_y = target_x, target_y
+
+    if abs(dpi_x - target_x) < 0.5 and abs(dpi_y - target_y) < 0.5:
+        return img_rgb, target_dpi
+
+    scale_x = target_x / dpi_x
+    scale_y = target_y / dpi_y
+    new_w = max(1, int(round(img_rgb.shape[1] * scale_x)))
+    new_h = max(1, int(round(img_rgb.shape[0] * scale_y)))
+    interpolation = cv2.INTER_AREA if scale_x < 1.0 or scale_y < 1.0 else cv2.INTER_CUBIC
+    normalized = cv2.resize(img_rgb, (new_w, new_h), interpolation=interpolation)
+    return normalized.astype(img_rgb.dtype, copy=False), target_dpi
 
 
 # ============================================================
@@ -587,23 +611,22 @@ def template_patch_x_positions(chart_left: float, chart_width: float) -> Dict[st
     """
     Posiciones horizontales de medicion en la carta rectificada.
 
-    La plantilla usa mediciones sobre la vista canonica de 2500 px:
-    C1 empieza a 100 px del borde izquierdo, cada parche mide 70 px, y
-    B9 termina a 112 px del borde derecho. Dentro de cada grupo los
-    parches se tratan como celdas consecutivas de 70 px.
+    La plantilla usa las relaciones medidas sobre LT=2345 px:
+    P1=100, C1..11=890, P2=1362 y 10..B9=880.
     """
-    scale = float(chart_width) / PATCH_TEMPLATE_CHART_WIDTH
-    patch_w = PATCH_TEMPLATE_WIDTH * scale
-    left_start = chart_left + PATCH_TEMPLATE_LEFT_MARGIN * scale
-    right_last_start = chart_left + chart_width - (PATCH_TEMPLATE_RIGHT_MARGIN + PATCH_TEMPLATE_WIDTH) * scale
+    scale = float(chart_width) / PATCH_TEMPLATE_LT
+    left_start = chart_left + PATCH_TEMPLATE_P1 * scale
+    left_patch_w = PATCH_TEMPLATE_LEFT_GROUP_WIDTH * scale / len(LEFT_LABELS)
+    right_start = chart_left + PATCH_TEMPLATE_P2 * scale
+    right_patch_w = PATCH_TEMPLATE_RIGHT_GROUP_WIDTH * scale / len(RIGHT_LABELS)
 
     positions: Dict[str, Tuple[float, float]] = {}
     for i, label in enumerate(LEFT_LABELS):
-        x0 = left_start + i * patch_w
-        positions[label] = (x0, x0 + patch_w)
+        x0 = left_start + i * left_patch_w
+        positions[label] = (x0, x0 + left_patch_w)
     for i, label in enumerate(RIGHT_LABELS):
-        x0 = right_last_start - (len(RIGHT_LABELS) - 1 - i) * patch_w
-        positions[label] = (x0, x0 + patch_w)
+        x0 = right_start + i * right_patch_w
+        positions[label] = (x0, x0 + right_patch_w)
     return positions
 
 
@@ -807,8 +830,9 @@ def correct_chart_preview(chart: np.ndarray, rois: Dict[str, Tuple[float, float,
 # ============================================================
 
 def process_one(input_path: Path, output_path: Path, mode: str, strength: float, debug: bool) -> None:
-    img = read_rgb_image(input_path)
     dpi = get_dpi(input_path)
+    img = read_rgb_image(input_path)
+    img, dpi = normalize_image_to_dpi(img, dpi)
     chart, _corners = find_and_warp_chart(img)
     rois = generate_patch_rois_auto(chart)
     measured_before = sample_patch_values(chart, rois)

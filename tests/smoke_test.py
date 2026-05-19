@@ -15,15 +15,17 @@ sys.path.insert(0, str(SRC_DIR))
 from te263_color_corrector.calibrator import (  # noqa: E402
     ALL_LABELS,
     LEFT_LABELS,
-    PATCH_TEMPLATE_CHART_WIDTH,
-    PATCH_TEMPLATE_LEFT_MARGIN,
-    PATCH_TEMPLATE_RIGHT_MARGIN,
-    PATCH_TEMPLATE_WIDTH,
+    PATCH_TEMPLATE_LEFT_GROUP_WIDTH,
+    PATCH_TEMPLATE_LT,
+    PATCH_TEMPLATE_P1,
+    PATCH_TEMPLATE_P2,
+    PATCH_TEMPLATE_RIGHT_GROUP_WIDTH,
     REFERENCE_LAB,
     RIGHT_LABELS,
     find_bottom_chart_span,
     iter_images,
     lab_to_srgb,
+    normalize_image_to_dpi,
     process_one,
     template_patch_x_positions,
 )
@@ -83,12 +85,10 @@ def create_synthetic_input(path: Path) -> None:
     _draw_arrow(image, chart_x + 45, chart_y + 15, scale=1)
     _draw_arrow(image, chart_x + chart_w - 45, chart_y + 15, scale=1)
 
-    left_start = PATCH_TEMPLATE_LEFT_MARGIN / PATCH_TEMPLATE_CHART_WIDTH
-    left_end = (PATCH_TEMPLATE_LEFT_MARGIN + len(LEFT_LABELS) * PATCH_TEMPLATE_WIDTH) / PATCH_TEMPLATE_CHART_WIDTH
-    right_start = (
-        PATCH_TEMPLATE_CHART_WIDTH - PATCH_TEMPLATE_RIGHT_MARGIN - len(RIGHT_LABELS) * PATCH_TEMPLATE_WIDTH
-    ) / PATCH_TEMPLATE_CHART_WIDTH
-    right_end = (PATCH_TEMPLATE_CHART_WIDTH - PATCH_TEMPLATE_RIGHT_MARGIN) / PATCH_TEMPLATE_CHART_WIDTH
+    left_start = PATCH_TEMPLATE_P1 / PATCH_TEMPLATE_LT
+    left_end = (PATCH_TEMPLATE_P1 + PATCH_TEMPLATE_LEFT_GROUP_WIDTH) / PATCH_TEMPLATE_LT
+    right_start = PATCH_TEMPLATE_P2 / PATCH_TEMPLATE_LT
+    right_end = (PATCH_TEMPLATE_P2 + PATCH_TEMPLATE_RIGHT_GROUP_WIDTH) / PATCH_TEMPLATE_LT
     _draw_group(image, LEFT_LABELS, chart_x, chart_y, chart_w, chart_h, left_start, left_end)
     _draw_group(image, RIGHT_LABELS, chart_x, chart_y, chart_w, chart_h, right_start, right_end)
 
@@ -117,13 +117,27 @@ def check_iter_images(run_dir: Path) -> None:
 
 
 def check_template_patch_positions() -> None:
-    positions = template_patch_x_positions(0, 2500)
-    if positions["C1"] != (100.0, 170.0):
+    positions = template_patch_x_positions(0, PATCH_TEMPLATE_LT)
+    left_patch_w = PATCH_TEMPLATE_LEFT_GROUP_WIDTH / len(LEFT_LABELS)
+    right_patch_w = PATCH_TEMPLATE_RIGHT_GROUP_WIDTH / len(RIGHT_LABELS)
+    expected_c1 = (PATCH_TEMPLATE_P1, PATCH_TEMPLATE_P1 + left_patch_w)
+    if not np.allclose(positions["C1"], expected_c1):
         raise AssertionError(f"Unexpected C1 position: {positions['C1']}")
-    if positions["B1"] != (170.0, 240.0):
+    expected_b1 = (100.0 + left_patch_w, 100.0 + 2 * left_patch_w)
+    if not np.allclose(positions["B1"], expected_b1):
         raise AssertionError(f"Unexpected B1 position: {positions['B1']}")
-    if positions["B9"] != (2318.0, 2388.0):
+    expected_b9 = (PATCH_TEMPLATE_P2 + 12 * right_patch_w, PATCH_TEMPLATE_P2 + PATCH_TEMPLATE_RIGHT_GROUP_WIDTH)
+    if not np.allclose(positions["B9"], expected_b9):
         raise AssertionError(f"Unexpected B9 position: {positions['B9']}")
+
+
+def check_dpi_normalization() -> None:
+    image = np.zeros((10, 20, 3), dtype=np.uint8)
+    normalized, dpi = normalize_image_to_dpi(image, (150.0, 150.0))
+    if normalized.shape[:2] != (20, 40):
+        raise AssertionError(f"Unexpected normalized shape: {normalized.shape}")
+    if dpi != (300.0, 300.0):
+        raise AssertionError(f"Unexpected normalized DPI: {dpi}")
 
 
 def check_bottom_span_on_synthetic(input_path: Path) -> None:
@@ -142,6 +156,7 @@ def main() -> None:
 
     check_iter_images(run_dir)
     check_template_patch_positions()
+    check_dpi_normalization()
     create_synthetic_input(input_path)
     check_bottom_span_on_synthetic(input_path)
     process_one(input_path, output_path, mode="hybrid", strength=1.0, debug=True)
