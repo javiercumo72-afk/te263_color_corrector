@@ -1,0 +1,21 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "te263-color-corrector"
+version = "0.1.0"
+description = "Color correction for scans and photographs using the Image Engineering TE263 chart."
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "numpy>=1.24",
+    "opencv-python>=4.8",
+    "Pillow>=10.0",
+]
+
+[project.scripts]
+te263-correct = "te263_color_corrector.calibrator:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
