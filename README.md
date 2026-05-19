@@ -60,6 +60,14 @@ Con `--debug`, junto al TIFF corregido se generan:
 - `*_debug_chart_after.jpg`: carta corregida.
 - `*_patch_report.csv`: mediciones RGB antes/despues y objetivos Lab/sRGB.
 
+## Deteccion de la carta
+
+El detector busca la TE263 en la parte inferior de la imagen, tanto si aparece
+centrada como desplazada hacia la derecha. La carta se endereza con una
+transformacion de perspectiva y se valida reconociendo las dos flechas negras de
+los extremos. Esas flechas se usan como anclas horizontales para fijar la
+posicion esperada de los dos grupos de parches de color.
+
 ## Notas
 
 Los valores Lab de referencia estan incluidos como valores por defecto. Si se

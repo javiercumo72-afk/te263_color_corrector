@@ -50,6 +50,23 @@ def _draw_group(
         image[y0:y1, px0:px1] = _rgb8(label)
 
 
+def _draw_arrow(image: np.ndarray, x: int, y: int, scale: int = 1) -> None:
+    shaft_w = 18 * scale
+    shaft_h = 58 * scale
+    head_w = 50 * scale
+    head_h = 38 * scale
+    cx = x
+    image[y + head_h : y + head_h + shaft_h, cx - shaft_w // 2 : cx + shaft_w // 2] = 0
+    points = np.array([
+        [cx, y],
+        [cx - head_w // 2, y + head_h],
+        [cx + head_w // 2, y + head_h],
+    ], dtype=np.int32)
+    import cv2
+
+    cv2.fillConvexPoly(image, points, (0, 0, 0))
+
+
 def create_synthetic_input(path: Path) -> None:
     width, height = 3000, 1800
     image = np.full((height, width, 3), 28, dtype=np.uint8)
@@ -57,6 +74,8 @@ def create_synthetic_input(path: Path) -> None:
     chart_x, chart_y = 150, 1120
     chart_w, chart_h = 2700, 335
     image[chart_y : chart_y + chart_h, chart_x : chart_x + chart_w] = 235
+    _draw_arrow(image, chart_x + 45, chart_y + 15, scale=1)
+    _draw_arrow(image, chart_x + chart_w - 45, chart_y + 15, scale=1)
 
     _draw_group(image, LEFT_LABELS, chart_x, chart_y, chart_w, chart_h, 0.041, 0.413)
     _draw_group(image, RIGHT_LABELS, chart_x, chart_y, chart_w, chart_h, 0.566, 0.963)

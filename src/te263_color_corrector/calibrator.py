@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, Iterable, List, Tuple
 
@@ -71,6 +72,23 @@ RIGHT_LABELS = ["10", "09", "03", "02", "01", "C7", "B7", "A7", "C8", "B8", "A8"
 ALL_LABELS = LEFT_LABELS + RIGHT_LABELS
 NEUTRAL_LABELS = ["20", "18", "17", "16", "11", "10", "09", "03", "02", "01"]
 SUPPORTED_EXTENSIONS = {".tif", ".tiff", ".jpg", ".jpeg", ".png"}
+
+
+@dataclass(frozen=True)
+class ChartAnchors:
+    left_arrow: Tuple[int, int, int, int]
+    right_arrow: Tuple[int, int, int, int]
+    confidence: float
+
+    @property
+    def left_center(self) -> Tuple[float, float]:
+        x, y, w, h = self.left_arrow
+        return x + w / 2.0, y + h / 2.0
+
+    @property
+    def right_center(self) -> Tuple[float, float]:
+        x, y, w, h = self.right_arrow
+        return x + w / 2.0, y + h / 2.0
 
 
 # ============================================================
@@ -201,6 +219,137 @@ def intervals_from_mask(mask: np.ndarray, min_width: int = 5) -> List[Tuple[int,
     return intervals
 
 
+def as_uint8_rgb(img_rgb: np.ndarray) -> np.ndarray:
+    return (img_rgb / 257).astype(np.uint8) if img_rgb.dtype == np.uint16 else img_rgb
+
+
+def warp_chart_from_corners(img_rgb: np.ndarray, corners: np.ndarray) -> np.ndarray:
+    out_w, out_h = 2500, 310
+    dst = np.array([[0, 0], [out_w - 1, 0], [out_w - 1, out_h - 1], [0, out_h - 1]], dtype=np.float32)
+    M = cv2.getPerspectiveTransform(corners, dst)
+    return cv2.warpPerspective(img_rgb, M, (out_w, out_h), flags=cv2.INTER_CUBIC)
+
+
+def find_light_chart_bounds(chart_rgb: np.ndarray) -> Tuple[int, int, int, int]:
+    img8 = as_uint8_rgb(chart_rgb)
+    gray = cv2.cvtColor(img8, cv2.COLOR_RGB2GRAY)
+    mask = (gray > 105).astype(np.uint8) * 255
+    kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (51, 9))
+    mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel, iterations=1)
+    contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    h, w = gray.shape[:2]
+
+    boxes = []
+    for cnt in contours:
+        x, y, bw, bh = cv2.boundingRect(cnt)
+        if bw > w * 0.70 and bh > h * 0.45:
+            boxes.append((cv2.contourArea(cnt), x, y, bw, bh))
+    if not boxes:
+        return 0, 0, w, h
+    _, x, y, bw, bh = max(boxes, key=lambda item: item[0])
+    return x, y, bw, bh
+
+
+def detect_arrow_in_side(chart_rgb: np.ndarray, side: str) -> Tuple[int, int, int, int, float] | None:
+    img8 = as_uint8_rgb(chart_rgb)
+    gray = cv2.cvtColor(img8, cv2.COLOR_RGB2GRAY)
+    h, w = gray.shape[:2]
+    bx, by, bw_chart, bh_chart = find_light_chart_bounds(chart_rgb)
+
+    if side == "left":
+        x0, x1 = bx, min(w, bx + int(bw_chart * 0.14))
+    else:
+        x0, x1 = max(0, bx + int(bw_chart * 0.86)), min(w, bx + bw_chart)
+    y0, y1 = by, min(h, by + int(bh_chart * 0.55))
+
+    roi = gray[y0:y1, x0:x1]
+    dark = (roi < 95).astype(np.uint8) * 255
+    kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3))
+    dark = cv2.morphologyEx(dark, cv2.MORPH_OPEN, kernel, iterations=1)
+
+    contours, _ = cv2.findContours(dark, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    candidates: List[Tuple[float, Tuple[int, int, int, int, float]]] = []
+    for cnt in contours:
+        area = float(cv2.contourArea(cnt))
+        if area < 180:
+            continue
+        x, y, bw, bh = cv2.boundingRect(cnt)
+        if bw < 12 or bh < 32:
+            continue
+        aspect = bh / float(bw)
+        fill = area / float(bw * bh)
+        if aspect < 1.05 or not 0.10 <= fill <= 0.88:
+            continue
+
+        full_x = x0 + x
+        full_y = y0 + y
+        if side == "left" and full_x > bx + bw_chart * 0.10:
+            continue
+        if side == "right" and full_x + bw < bx + bw_chart * 0.90:
+            continue
+
+        top_bonus = 3.0 if full_y < by + bh_chart * 0.25 else 1.0
+        side_bonus = 1.15 if (side == "left" and full_x < bx + bw_chart * 0.06) or (side == "right" and full_x > bx + bw_chart * 0.92) else 1.0
+        score = area * aspect * top_bonus * side_bonus
+        candidates.append((score, (full_x, full_y, bw, bh, score)))
+
+    if not candidates:
+        y_proj0 = int(bh_chart * 0.08)
+        y_proj1 = min(dark.shape[0], int(bh_chart * 0.48))
+        proj_mask = dark[y_proj0:y_proj1].copy()
+        col_score = smooth_1d(proj_mask.mean(axis=0), 7)
+        active = col_score > 18.0
+        intervals = intervals_from_mask(active, min_width=8)
+        projection_candidates: List[Tuple[float, Tuple[int, int, int, int, float]]] = []
+        for px0, px1 in intervals:
+            if side == "left" and x0 + px0 > bx + bw_chart * 0.09:
+                continue
+            if side == "right" and x0 + px1 < bx + bw_chart * 0.91:
+                continue
+            patch = proj_mask[:, px0:px1 + 1]
+            ys, xs = np.where(patch > 0)
+            if len(xs) == 0:
+                continue
+            bx0 = x0 + px0 + int(xs.min())
+            bx1 = x0 + px0 + int(xs.max())
+            by0 = y0 + y_proj0 + int(ys.min())
+            by1 = y0 + y_proj0 + int(ys.max())
+            bw = bx1 - bx0 + 1
+            bh = by1 - by0 + 1
+            if bw < 8 or bw > w * 0.08 or bh < 28 or bh > h * 0.42:
+                continue
+            aspect = bh / float(bw)
+            if aspect < 1.0:
+                continue
+            score = float(patch.sum()) * aspect
+            projection_candidates.append((score, (bx0, by0, bw, bh, score)))
+        if not projection_candidates:
+            return None
+        return max(projection_candidates, key=lambda item: item[0])[1]
+    return max(candidates, key=lambda item: item[0])[1]
+
+
+def detect_chart_arrows(chart_rgb: np.ndarray) -> ChartAnchors | None:
+    left = detect_arrow_in_side(chart_rgb, "left")
+    right = detect_arrow_in_side(chart_rgb, "right")
+    if left is None or right is None:
+        return None
+
+    h, w = chart_rgb.shape[:2]
+    lx, ly, lw, lh, left_score = left
+    rx, ry, rw, rh, right_score = right
+    left_center = (lx + lw / 2.0, ly + lh / 2.0)
+    right_center = (rx + rw / 2.0, ry + rh / 2.0)
+
+    if right_center[0] - left_center[0] < w * 0.75:
+        return None
+    if abs(right_center[1] - left_center[1]) > h * 0.28:
+        return None
+
+    confidence = float(min(left_score, right_score) / max(w * h, 1))
+    return ChartAnchors((lx, ly, lw, lh), (rx, ry, rw, rh), confidence)
+
+
 def find_chart_corners_from_bright_band(gray: np.ndarray) -> np.ndarray | None:
     """
     Fallback para casos en los que la pagina y la carta quedan conectadas en el
@@ -257,7 +406,7 @@ def find_chart_corners_from_bright_band(gray: np.ndarray) -> np.ndarray | None:
 
 def find_and_warp_chart(img_rgb: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
     h, w = img_rgb.shape[:2]
-    img8 = (img_rgb / 257).astype(np.uint8) if img_rgb.dtype == np.uint16 else img_rgb
+    img8 = as_uint8_rgb(img_rgb)
     gray = cv2.cvtColor(img8, cv2.COLOR_RGB2GRAY)
 
     # La carta suele estar en la parte inferior del escaneo.
@@ -270,7 +419,7 @@ def find_and_warp_chart(img_rgb: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
     th = cv2.morphologyEx(th, cv2.MORPH_CLOSE, kernel, iterations=2)
 
     contours, _ = cv2.findContours(th, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-    candidates = []
+    candidates: List[Tuple[float, np.ndarray]] = []
     for cnt in contours:
         area = cv2.contourArea(cnt)
         if area < 10000:
@@ -281,16 +430,24 @@ def find_and_warp_chart(img_rgb: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
             rw, rh = rh, rw
         aspect = rw / rh if rh else 0.0
         x, y, bw, bh = cv2.boundingRect(cnt)
-        if 5.0 <= aspect <= 13.5 and bw >= 700 and bh >= 70:
-            candidates.append((area, cnt))
+        if not (5.0 <= aspect <= 13.5 and bw >= 700 and bh >= 70):
+            continue
 
-    if candidates:
-        candidates.sort(key=lambda item: item[0], reverse=True)
-        cnt = candidates[0][1]
-        rect = cv2.minAreaRect(cnt)
         box = cv2.boxPoints(rect)
         box[:, 1] += y_start
-        corners = order_points_clockwise(box.astype(np.float32))
+        corners_candidate = order_points_clockwise(box.astype(np.float32))
+        chart_candidate = warp_chart_from_corners(img_rgb, corners_candidate)
+        anchors = detect_chart_arrows(chart_candidate)
+
+        center_x = x + bw / 2.0
+        lower_bonus = 1.0 + min(0.35, ((y_start + y + bh / 2.0) / h - 0.55))
+        position_bonus = 1.15 if center_x > w * 0.42 else 1.0
+        arrow_bonus = 5.0 if anchors is not None else 1.0
+        score = float(area) * lower_bonus * position_bonus * arrow_bonus
+        candidates.append((score, corners_candidate))
+
+    if candidates:
+        corners = max(candidates, key=lambda item: item[0])[1]
     else:
         corners = find_chart_corners_from_bright_band(gray)
         if corners is None:
@@ -300,10 +457,11 @@ def find_and_warp_chart(img_rgb: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
             )
 
     # Vista canónica. Mantener estable porque los cálculos de ROIs trabajan sobre esta vista.
-    out_w, out_h = 2500, 310
-    dst = np.array([[0, 0], [out_w - 1, 0], [out_w - 1, out_h - 1], [0, out_h - 1]], dtype=np.float32)
-    M = cv2.getPerspectiveTransform(corners, dst)
-    chart = cv2.warpPerspective(img_rgb, M, (out_w, out_h), flags=cv2.INTER_CUBIC)
+    chart = warp_chart_from_corners(img_rgb, corners)
+    if detect_chart_arrows(chart) is None:
+        raise RuntimeError(
+            "Se encontró una banda compatible con la TE263, pero no se reconocieron las dos flechas extremas."
+        )
     return chart, corners
 
 
@@ -409,7 +567,23 @@ def generate_patch_rois_auto(chart_rgb: np.ndarray) -> Dict[str, Tuple[float, fl
     inner = chart_rgb[iy:iy + ih, ix:ix + iw]
 
     py0, py1 = detect_patch_band(inner)
-    left, right = detect_patch_group_edges(inner, py0, py1)
+    anchors = detect_chart_arrows(chart_rgb)
+    if anchors is not None:
+        left_x, _ = anchors.left_center
+        right_x, _ = anchors.right_center
+        span = right_x - left_x
+        left = (
+            int(round(left_x + span * 0.095 - ix)),
+            int(round(left_x + span * 0.455 - ix)),
+        )
+        right = (
+            int(round(left_x + span * 0.596 - ix)),
+            int(round(left_x + span * 0.938 - ix)),
+        )
+        left = (max(0, left[0]), min(iw - 1, left[1]))
+        right = (max(0, right[0]), min(iw - 1, right[1]))
+    else:
+        left, right = detect_patch_group_edges(inner, py0, py1)
 
     # Las mediciones usan solo el centro del parche, lejos de bordes, texto y sombras.
     rois: Dict[str, Tuple[float, float, float, float]] = {}
