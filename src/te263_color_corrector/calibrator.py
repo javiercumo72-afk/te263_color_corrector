@@ -24,6 +24,8 @@ from __future__ import annotations
 
 import argparse
 import csv
+import shutil
+import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, Iterable, List, Tuple
@@ -73,6 +75,7 @@ ALL_LABELS = LEFT_LABELS + RIGHT_LABELS
 NEUTRAL_LABELS = ["20", "18", "17", "16", "11", "10", "09", "03", "02", "01"]
 SUPPORTED_EXTENSIONS = {".tif", ".tiff", ".jpg", ".jpeg", ".png"}
 TARGET_DPI = (300.0, 300.0)
+DEFAULT_ADOBE_RGB_PROFILE = Path(r"C:\Windows\System32\spool\drivers\color\AdobeRGB1998.icc")
 PATCH_TEMPLATE_LT = 2345.0
 PATCH_TEMPLATE_P1 = 100.0
 PATCH_TEMPLATE_LEFT_GROUP_WIDTH = 890.0
@@ -184,9 +187,58 @@ def get_dpi(path: Path) -> Tuple[float, float]:
         return 300.0, 300.0
 
 
-def save_tiff_lzw(path: Path, img_rgb: np.ndarray, dpi: Tuple[float, float]) -> None:
-    # Pillow soporta TIFF-LZW sin imagecodecs.
-    Image.fromarray(img_rgb).save(path, compression="tiff_lzw", dpi=dpi)
+def to_rgb24(img_rgb: np.ndarray) -> np.ndarray:
+    if img_rgb.dtype == np.uint8:
+        return img_rgb
+    if img_rgb.dtype == np.uint16:
+        return np.clip(img_rgb / 257.0 + 0.5, 0, 255).astype(np.uint8)
+    return np.clip(img_rgb, 0, 255).astype(np.uint8)
+
+
+def read_icc_profile(path: Path | None) -> bytes | None:
+    if path is None:
+        return None
+    if not path.exists():
+        raise RuntimeError(f"No existe el perfil ICC: {path}")
+    return path.read_bytes()
+
+
+def save_tiff_uncompressed(
+    path: Path,
+    img_rgb: np.ndarray,
+    dpi: Tuple[float, float],
+    icc_profile_path: Path | None,
+) -> None:
+    img24 = to_rgb24(img_rgb)
+    kwargs = {"dpi": dpi}
+    icc_profile = read_icc_profile(icc_profile_path)
+    if icc_profile is not None:
+        kwargs["icc_profile"] = icc_profile
+    Image.fromarray(img24, mode="RGB").save(path, format="TIFF", compression="raw", **kwargs)
+
+
+def copy_source_metadata(source_path: Path, output_path: Path) -> None:
+    exiftool = shutil.which("exiftool")
+    if exiftool is None:
+        print("AVISO: ExifTool no esta disponible; no se copiaron metadatos de la fuente.")
+        return
+
+    cmd = [
+        exiftool,
+        "-overwrite_original",
+        "-TagsFromFile",
+        str(source_path),
+        "-all:all",
+        "--ICC_Profile:all",
+        "--XResolution",
+        "--YResolution",
+        "--ResolutionUnit",
+        str(output_path),
+    ]
+    result = subprocess.run(cmd, capture_output=True, text=True)
+    if result.returncode != 0:
+        message = (result.stderr or result.stdout).strip()
+        raise RuntimeError(f"No se pudieron copiar metadatos con ExifTool: {message}")
 
 
 def normalize_image_to_dpi(
@@ -897,7 +949,15 @@ def correct_chart_preview(chart: np.ndarray, rois: Dict[str, Tuple[float, float,
 # Procesamiento
 # ============================================================
 
-def process_one(input_path: Path, output_path: Path, mode: str, strength: float, debug: bool) -> None:
+def process_one(
+    input_path: Path,
+    output_path: Path,
+    mode: str,
+    strength: float,
+    debug: bool,
+    debug_dir: Path | None = None,
+    icc_profile_path: Path | None = DEFAULT_ADOBE_RGB_PROFILE,
+) -> None:
     dpi = get_dpi(input_path)
     img = read_rgb_image(input_path)
     img, dpi = normalize_image_to_dpi(img, dpi)
@@ -937,12 +997,15 @@ def process_one(input_path: Path, output_path: Path, mode: str, strength: float,
         raise RuntimeError(f"Modo desconocido: {mode}")
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    save_tiff_lzw(output_path, corrected, dpi)
+    save_tiff_uncompressed(output_path, corrected, TARGET_DPI, icc_profile_path)
+    copy_source_metadata(input_path, output_path)
 
     if debug:
-        save_debug_chart(chart, rois, output_path.with_name(output_path.stem + "_debug_chart_before.jpg"))
-        save_debug_chart(corrected_chart, rois, output_path.with_name(output_path.stem + "_debug_chart_after.jpg"))
-        save_patch_report(measured_before, measured_after, output_path.with_name(output_path.stem + "_patch_report.csv"))
+        debug_base = debug_dir if debug_dir is not None else output_path.parent
+        debug_base.mkdir(parents=True, exist_ok=True)
+        save_debug_chart(chart, rois, debug_base / f"{output_path.stem}_debug_chart_before.jpg")
+        save_debug_chart(corrected_chart, rois, debug_base / f"{output_path.stem}_debug_chart_after.jpg")
+        save_patch_report(measured_before, measured_after, debug_base / f"{output_path.stem}_patch_report.csv")
 
     print(f"OK: {input_path.name} -> {output_path}")
 
@@ -966,6 +1029,13 @@ def main() -> None:
     )
     parser.add_argument("--strength", type=float, default=1.0, help="Intensidad de corrección: 0.0 a 1.0")
     parser.add_argument("--debug", action="store_true", help="Guardar carta detectada con ROIs y CSV de mediciones")
+    parser.add_argument("--debug-dir", type=Path, help="Carpeta separada para JPG de debug y CSV de mediciones")
+    parser.add_argument(
+        "--icc-profile",
+        type=Path,
+        default=DEFAULT_ADOBE_RGB_PROFILE,
+        help="Perfil ICC a incrustar en los TIFF de salida. Por defecto: AdobeRGB1998.icc de Windows",
+    )
     parser.add_argument("--recursive", action="store_true", help="Procesar subcarpetas si la entrada es una carpeta")
     parser.add_argument(
         "--continue-on-error",
@@ -985,6 +1055,8 @@ def main() -> None:
         if args.output.exists() and not args.output.is_dir():
             raise SystemExit(f"La salida debe ser una carpeta, pero ya existe como archivo: {args.output}")
         args.output.mkdir(parents=True, exist_ok=True)
+        if args.debug and args.debug_dir is not None:
+            args.debug_dir.mkdir(parents=True, exist_ok=True)
         images = list(iter_images(args.input, args.recursive))
         if not images:
             scope = "recursivamente" if args.recursive else "en el nivel principal"
@@ -997,8 +1069,17 @@ def main() -> None:
         for img_path in images:
             rel = img_path.relative_to(args.input)
             out_path = args.output / rel.with_suffix(".tif")
+            image_debug_dir = (args.debug_dir / rel.parent) if args.debug_dir is not None else None
             try:
-                process_one(img_path, out_path, args.mode, strength, args.debug)
+                process_one(
+                    img_path,
+                    out_path,
+                    args.mode,
+                    strength,
+                    args.debug,
+                    debug_dir=image_debug_dir,
+                    icc_profile_path=args.icc_profile,
+                )
                 success_count += 1
             except Exception as exc:
                 if not args.continue_on_error:
@@ -1016,7 +1097,15 @@ def main() -> None:
         output_path = args.output or args.input.with_name(args.input.stem + "_corrected.tif")
         if output_path.exists() and output_path.is_dir():
             raise SystemExit(f"La salida debe ser un archivo, pero es una carpeta: {output_path}")
-        process_one(args.input, output_path, args.mode, strength, args.debug)
+        process_one(
+            args.input,
+            output_path,
+            args.mode,
+            strength,
+            args.debug,
+            debug_dir=args.debug_dir,
+            icc_profile_path=args.icc_profile,
+        )
 
 
 if __name__ == "__main__":

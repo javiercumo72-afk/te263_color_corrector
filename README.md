@@ -46,6 +46,13 @@ Procesar una carpeta y continuar si alguna imagen falla:
 te263-correct carpeta_entrada carpeta_salida --recursive --mode hybrid --debug --continue-on-error
 ```
 
+Procesar una carpeta dejando TIFF finales en una carpeta y JPG/CSV de diagnostico
+en otra:
+
+```powershell
+te263-correct carpeta_entrada carpeta_salida --recursive --mode matrix --debug --debug-dir carpeta_debug --continue-on-error
+```
+
 Alternativa sin instalar el comando:
 
 ```powershell
@@ -59,6 +66,21 @@ Con `--debug`, junto al TIFF corregido se generan:
 - `*_debug_chart_before.jpg`: carta detectada antes de corregir.
 - `*_debug_chart_after.jpg`: carta corregida.
 - `*_patch_report.csv`: mediciones RGB antes/despues y objetivos Lab/sRGB.
+
+Si se indica `--debug-dir`, esos JPG/CSV se guardan en esa carpeta separada y
+los TIFF finales quedan solos en la carpeta de salida.
+
+## Salida final
+
+Los TIFF finales se guardan sin compresion, a 300x300 DPI, en RGB de 24 bits.
+El programa copia metadatos de la imagen fuente con ExifTool y conserva el perfil
+ICC indicado con `--icc-profile`; por defecto usa Adobe RGB 1998 desde:
+
+```text
+C:\Windows\System32\spool\drivers\color\AdobeRGB1998.icc
+```
+
+Para ejecuciones por lotes con rutas editables, usa `procesar_te263.bat`.
 
 ## Deteccion de la carta
 
