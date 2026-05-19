@@ -253,6 +253,30 @@ def find_light_chart_bounds(chart_rgb: np.ndarray) -> Tuple[int, int, int, int]:
     return x0, y0, x1 - x0 + 1, y1 - y0 + 1
 
 
+def find_bottom_chart_span(chart_rgb: np.ndarray) -> Tuple[int, int]:
+    """Mide la longitud horizontal de la carta usando su franja inferior."""
+    img8 = as_uint8_rgb(chart_rgb)
+    gray = cv2.cvtColor(img8, cv2.COLOR_RGB2GRAY)
+    h, w = gray.shape[:2]
+
+    y0 = int(h * 0.64)
+    y1 = int(h * 0.96)
+    strip = gray[y0:y1]
+    if strip.size == 0:
+        return 0, w
+
+    light = ((strip > 105) & (strip < 252)).astype(np.uint8)
+    col_score = smooth_1d(light.mean(axis=0), 41)
+    intervals = intervals_from_mask(col_score > 0.30, min_width=max(300, int(w * 0.30)))
+    if not intervals:
+        bx, _by, bw, _bh = find_light_chart_bounds(chart_rgb)
+        return bx, bx + bw
+
+    x0 = min(item[0] for item in intervals)
+    x1 = max(item[1] for item in intervals) + 1
+    return x0, x1
+
+
 def detect_arrow_in_side(chart_rgb: np.ndarray, side: str) -> Tuple[int, int, int, int, float] | None:
     img8 = as_uint8_rgb(chart_rgb)
     gray = cv2.cvtColor(img8, cv2.COLOR_RGB2GRAY)
@@ -559,7 +583,7 @@ def detect_patch_group_edges(inner_rgb: np.ndarray, y0: int, y1: int) -> Tuple[T
     return left, right
 
 
-def template_patch_x_positions(chart_left: int, chart_width: int) -> Dict[str, Tuple[float, float]]:
+def template_patch_x_positions(chart_left: float, chart_width: float) -> Dict[str, Tuple[float, float]]:
     """
     Posiciones horizontales de medicion en la carta rectificada.
 
@@ -568,7 +592,7 @@ def template_patch_x_positions(chart_left: int, chart_width: int) -> Dict[str, T
     B9 termina a 112 px del borde derecho. Dentro de cada grupo los
     parches se tratan como celdas consecutivas de 70 px.
     """
-    scale = chart_width / PATCH_TEMPLATE_CHART_WIDTH
+    scale = float(chart_width) / PATCH_TEMPLATE_CHART_WIDTH
     patch_w = PATCH_TEMPLATE_WIDTH * scale
     left_start = chart_left + PATCH_TEMPLATE_LEFT_MARGIN * scale
     right_last_start = chart_left + chart_width - (PATCH_TEMPLATE_RIGHT_MARGIN + PATCH_TEMPLATE_WIDTH) * scale
@@ -586,16 +610,16 @@ def template_patch_x_positions(chart_left: int, chart_width: int) -> Dict[str, T
 def generate_patch_rois_auto(chart_rgb: np.ndarray) -> Dict[str, Tuple[float, float, float, float]]:
     """
     Calcula ROIs normalizadas de los 26 parches. No usa posiciones fijas crudas;
-    primero detecta el área interior de la carta, la banda de parches y los extremos
-    de los grupos izquierdo/derecho.
+    primero detecta la banda vertical de parches y mide la longitud real de la
+    carta sobre el borde inferior para escalar las posiciones horizontales.
     """
     chart_h, chart_w = chart_rgb.shape[:2]
     ix, iy, iw, ih = find_inner_chart_box(chart_rgb)
-    chart_x, _chart_y, chart_box_w, _chart_box_h = find_light_chart_bounds(chart_rgb)
     inner = chart_rgb[iy:iy + ih, ix:ix + iw]
 
     py0, py1 = detect_patch_band(inner)
-    patch_x_positions = template_patch_x_positions(chart_x, chart_box_w)
+    chart_x0, chart_x1 = find_bottom_chart_span(chart_rgb)
+    patch_x_positions = template_patch_x_positions(chart_x0, chart_x1 - chart_x0)
 
     # Las mediciones usan solo el centro del parche, lejos de bordes, texto y sombras.
     rois: Dict[str, Tuple[float, float, float, float]] = {}

@@ -21,6 +21,7 @@ from te263_color_corrector.calibrator import (  # noqa: E402
     PATCH_TEMPLATE_WIDTH,
     REFERENCE_LAB,
     RIGHT_LABELS,
+    find_bottom_chart_span,
     iter_images,
     lab_to_srgb,
     process_one,
@@ -125,6 +126,15 @@ def check_template_patch_positions() -> None:
         raise AssertionError(f"Unexpected B9 position: {positions['B9']}")
 
 
+def check_bottom_span_on_synthetic(input_path: Path) -> None:
+    from te263_color_corrector.calibrator import find_and_warp_chart, read_rgb_image
+
+    chart, _corners = find_and_warp_chart(read_rgb_image(input_path))
+    x0, x1 = find_bottom_chart_span(chart)
+    if not (0 <= x0 < 120 and 2380 < x1 <= 2500):
+        raise AssertionError(f"Unexpected bottom chart span: {(x0, x1)}")
+
+
 def main() -> None:
     run_dir = PROJECT_ROOT / "test_runs" / "smoke"
     input_path = run_dir / "synthetic_te263_input.tif"
@@ -133,6 +143,7 @@ def main() -> None:
     check_iter_images(run_dir)
     check_template_patch_positions()
     create_synthetic_input(input_path)
+    check_bottom_span_on_synthetic(input_path)
     process_one(input_path, output_path, mode="hybrid", strength=1.0, debug=True)
 
     expected = [
