@@ -80,6 +80,7 @@ PATCH_TEMPLATE_P2 = 1362.0
 PATCH_TEMPLATE_RIGHT_GROUP_WIDTH = 880.0
 PATCH_SAMPLE_FRACTION_X = 0.58
 PATCH_SAMPLE_FRACTION_Y = 0.58
+PATCH_SAMPLE_Y_OFFSET = -20.0
 
 
 @dataclass(frozen=True)
@@ -709,7 +710,7 @@ def generate_patch_rois_auto(chart_rgb: np.ndarray) -> Dict[str, Tuple[float, fl
     y_margin = 0.22 * (py1 - py0 + 1)
     yy0_full = iy + py0 + y_margin
     yy1_full = iy + py1 - y_margin
-    y_center = (yy0_full + yy1_full) / 2.0
+    y_center = (yy0_full + yy1_full) / 2.0 + PATCH_SAMPLE_Y_OFFSET
     sample_h = (yy1_full - yy0_full) * PATCH_SAMPLE_FRACTION_Y
     yy0 = y_center - sample_h / 2.0
     yy1 = y_center + sample_h / 2.0
