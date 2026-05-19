@@ -78,6 +78,8 @@ PATCH_TEMPLATE_P1 = 100.0
 PATCH_TEMPLATE_LEFT_GROUP_WIDTH = 890.0
 PATCH_TEMPLATE_P2 = 1362.0
 PATCH_TEMPLATE_RIGHT_GROUP_WIDTH = 880.0
+PATCH_SAMPLE_FRACTION_X = 0.58
+PATCH_SAMPLE_FRACTION_Y = 0.58
 
 
 @dataclass(frozen=True)
@@ -256,6 +258,63 @@ def warp_chart_from_corners(img_rgb: np.ndarray, corners: np.ndarray) -> np.ndar
     dst = np.array([[0, 0], [out_w - 1, 0], [out_w - 1, out_h - 1], [0, out_h - 1]], dtype=np.float32)
     M = cv2.getPerspectiveTransform(corners, dst)
     return cv2.warpPerspective(img_rgb, M, (out_w, out_h), flags=cv2.INTER_CUBIC)
+
+
+def estimate_bottom_edge_angle(chart_rgb: np.ndarray) -> float | None:
+    img8 = as_uint8_rgb(chart_rgb)
+    gray = cv2.cvtColor(img8, cv2.COLOR_RGB2GRAY)
+    h, w = gray.shape[:2]
+    roi_y0 = int(h * 0.62)
+    roi = gray[roi_y0:h]
+
+    edges = cv2.Canny(roi, 40, 120)
+    lines = cv2.HoughLinesP(
+        edges,
+        rho=1,
+        theta=np.pi / 180.0,
+        threshold=70,
+        minLineLength=max(250, int(w * 0.20)),
+        maxLineGap=40,
+    )
+    if lines is None:
+        return None
+
+    candidates: List[Tuple[float, float]] = []
+    for line in lines[:, 0, :]:
+        x1, y1, x2, y2 = map(float, line)
+        dx = x2 - x1
+        dy = y2 - y1
+        if abs(dx) < 1:
+            continue
+        angle = float(np.degrees(np.arctan2(dy, dx)))
+        if abs(angle) > 6.0:
+            continue
+        y_mean = roi_y0 + (y1 + y2) / 2.0
+        if y_mean < h * 0.70:
+            continue
+        length = float(np.hypot(dx, dy))
+        candidates.append((length, angle))
+
+    if not candidates:
+        return None
+    return max(candidates, key=lambda item: item[0])[1]
+
+
+def level_chart_by_bottom_edge(chart_rgb: np.ndarray) -> np.ndarray:
+    angle = estimate_bottom_edge_angle(chart_rgb)
+    if angle is None or abs(angle) < 0.05:
+        return chart_rgb
+
+    h, w = chart_rgb.shape[:2]
+    center = (w / 2.0, h / 2.0)
+    matrix = cv2.getRotationMatrix2D(center, angle, 1.0)
+    return cv2.warpAffine(
+        chart_rgb,
+        matrix,
+        (w, h),
+        flags=cv2.INTER_CUBIC,
+        borderMode=cv2.BORDER_REPLICATE,
+    )
 
 
 def find_light_chart_bounds(chart_rgb: np.ndarray) -> Tuple[int, int, int, int]:
@@ -487,7 +546,7 @@ def find_and_warp_chart(img_rgb: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
         box = cv2.boxPoints(rect)
         box[:, 1] += y_start
         corners_candidate = order_points_clockwise(box.astype(np.float32))
-        chart_candidate = warp_chart_from_corners(img_rgb, corners_candidate)
+        chart_candidate = level_chart_by_bottom_edge(warp_chart_from_corners(img_rgb, corners_candidate))
         anchors = detect_chart_arrows(chart_candidate)
 
         center_x = x + bw / 2.0
@@ -508,7 +567,7 @@ def find_and_warp_chart(img_rgb: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
             )
 
     # Vista canónica. Mantener estable porque los cálculos de ROIs trabajan sobre esta vista.
-    chart = warp_chart_from_corners(img_rgb, corners)
+    chart = level_chart_by_bottom_edge(warp_chart_from_corners(img_rgb, corners))
     if detect_chart_arrows(chart) is None:
         raise RuntimeError(
             "Se encontró una banda compatible con la TE263, pero no se reconocieron las dos flechas extremas."
@@ -648,10 +707,18 @@ def generate_patch_rois_auto(chart_rgb: np.ndarray) -> Dict[str, Tuple[float, fl
     rois: Dict[str, Tuple[float, float, float, float]] = {}
 
     y_margin = 0.22 * (py1 - py0 + 1)
-    yy0 = iy + py0 + y_margin
-    yy1 = iy + py1 - y_margin
+    yy0_full = iy + py0 + y_margin
+    yy1_full = iy + py1 - y_margin
+    y_center = (yy0_full + yy1_full) / 2.0
+    sample_h = (yy1_full - yy0_full) * PATCH_SAMPLE_FRACTION_Y
+    yy0 = y_center - sample_h / 2.0
+    yy1 = y_center + sample_h / 2.0
     for label in ALL_LABELS:
-        xx0, xx1 = patch_x_positions[label]
+        xx0_full, xx1_full = patch_x_positions[label]
+        x_center = (xx0_full + xx1_full) / 2.0
+        sample_w = (xx1_full - xx0_full) * PATCH_SAMPLE_FRACTION_X
+        xx0 = x_center - sample_w / 2.0
+        xx1 = x_center + sample_w / 2.0
         rois[label] = (
             max(0.0, xx0 / chart_w),
             max(0.0, yy0 / chart_h),

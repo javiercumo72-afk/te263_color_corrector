@@ -20,6 +20,8 @@ from te263_color_corrector.calibrator import (  # noqa: E402
     PATCH_TEMPLATE_P1,
     PATCH_TEMPLATE_P2,
     PATCH_TEMPLATE_RIGHT_GROUP_WIDTH,
+    PATCH_SAMPLE_FRACTION_X,
+    PATCH_SAMPLE_FRACTION_Y,
     REFERENCE_LAB,
     RIGHT_LABELS,
     find_bottom_chart_span,
@@ -117,6 +119,9 @@ def check_iter_images(run_dir: Path) -> None:
 
 
 def check_template_patch_positions() -> None:
+    if not (0.0 < PATCH_SAMPLE_FRACTION_X < 1.0 and 0.0 < PATCH_SAMPLE_FRACTION_Y < 1.0):
+        raise AssertionError("Patch sample fractions must crop inside each patch cell")
+
     positions = template_patch_x_positions(0, PATCH_TEMPLATE_LT)
     left_patch_w = PATCH_TEMPLATE_LEFT_GROUP_WIDTH / len(LEFT_LABELS)
     right_patch_w = PATCH_TEMPLATE_RIGHT_GROUP_WIDTH / len(RIGHT_LABELS)
