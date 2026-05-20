@@ -18,6 +18,14 @@ rem ============================================================
 set "PROJECT_DIR=%~dp0"
 cd /d "%PROJECT_DIR%"
 
+if exist "%PROJECT_DIR%tools\exiftool.exe" (
+    set "PATH=%PROJECT_DIR%tools;%PATH%"
+)
+
+if exist "%PROJECT_DIR%icc\AdobeRGB1998.icc" (
+    set "ICC_PROFILE=%PROJECT_DIR%icc\AdobeRGB1998.icc"
+)
+
 if not exist ".venv\Scripts\python.exe" (
     echo Creando entorno virtual...
     python -m venv .venv
