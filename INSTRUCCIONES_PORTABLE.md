@@ -10,11 +10,13 @@
 
 1. Descomprime el ZIP en una carpeta local.
 2. Ejecuta `instalar_dependencias.bat`.
-3. Edita `procesar_te263.bat` y cambia estas rutas:
-   - `INPUT_DIR`
-   - `OUTPUT_DIR`
-   - `DEBUG_DIR`
-4. Ejecuta `procesar_te263.bat`.
+3. Ejecuta `procesar_te263.bat`.
+4. Cuando el BAT lo pida, ingresa:
+   - carpeta donde estan las subcarpetas con imagenes;
+   - carpeta destino para los TIFF corregidos;
+   - carpeta para archivos secundarios JPG/CSV de control.
+
+Si presionas Enter, el BAT usa los valores sugeridos.
 
 ## Perfil ICC y metadatos
 
@@ -38,7 +40,7 @@ comando `exiftool` funcione desde CMD o PowerShell.
 
 ## Archivos importantes
 
-- `procesar_te263.bat`: ejecucion por lotes con rutas editables.
+- `procesar_te263.bat`: ejecucion por lotes; pide rutas al iniciar.
 - `instalar_dependencias.bat`: crea `.venv` e instala dependencias.
 - `src\te263_color_corrector\calibrator.py`: codigo principal.
 - `requirements.txt`: dependencias Python.
