@@ -12,11 +12,12 @@
 2. Ejecuta `instalar_dependencias.bat`.
 3. Ejecuta `procesar_te263.bat`.
 4. Cuando el BAT lo pida, ingresa:
-   - carpeta donde estan las subcarpetas con imagenes;
-   - carpeta destino para los TIFF corregidos;
-   - carpeta para archivos secundarios JPG/CSV de control.
+   - directorio origen donde estan las subcarpetas con imagenes;
+   - directorio destino para los archivos TIFF corregidos;
+   - directorio para archivos secundarios JPG/CSV de control.
 
-Si presionas Enter, el BAT usa los valores sugeridos.
+Puedes pegar rutas con o sin comillas. El directorio origen debe existir. Los
+directorios de destino y secundarios se crean automaticamente si no existen.
 
 ## Perfil ICC y metadatos
 

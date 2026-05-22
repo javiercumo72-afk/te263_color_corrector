@@ -1,13 +1,10 @@
 @echo off
-setlocal
+setlocal EnableExtensions DisableDelayedExpansion
 
 rem ============================================================
 rem CONFIGURACION
-rem Puedes presionar Enter para usar los valores sugeridos.
+rem El BAT pedira las rutas al iniciar.
 rem ============================================================
-set "DEFAULT_INPUT_DIR=D:\TLT"
-set "DEFAULT_OUTPUT_DIR=D:\TLT_CORREGIDAS"
-set "DEFAULT_DEBUG_DIR=D:\TLT_DEBUG_TE263"
 set "MODE=matrix"
 set "STRENGTH=1.0"
 set "ICC_PROFILE=C:\Windows\System32\spool\drivers\color\AdobeRGB1998.icc"
@@ -23,29 +20,43 @@ echo ============================================================
 echo TE263 Color Corrector
 echo ============================================================
 echo.
-echo Ingresa la carpeta donde estan las subcarpetas con imagenes.
-echo Si presionas Enter se usara: "%DEFAULT_INPUT_DIR%"
-set /p "INPUT_DIR=Carpeta de entrada: "
-if "%INPUT_DIR%"=="" set "INPUT_DIR=%DEFAULT_INPUT_DIR%"
 
-echo.
-echo Ingresa la carpeta destino para los TIFF corregidos.
-echo Si presionas Enter se usara: "%DEFAULT_OUTPUT_DIR%"
-set /p "OUTPUT_DIR=Carpeta destino TIFF: "
-if "%OUTPUT_DIR%"=="" set "OUTPUT_DIR=%DEFAULT_OUTPUT_DIR%"
-
-echo.
-echo Ingresa la carpeta para archivos secundarios JPG/CSV de control.
-echo Si presionas Enter se usara: "%DEFAULT_DEBUG_DIR%"
-set /p "DEBUG_DIR=Carpeta secundarios/debug: "
-if "%DEBUG_DIR%"=="" set "DEBUG_DIR=%DEFAULT_DEBUG_DIR%"
-
-if not exist "%INPUT_DIR%" (
+:ASK_INPUT_DIR
+echo Ingresa el DIRECTORIO ORIGEN.
+echo Debe ser la carpeta donde estan las subcarpetas con imagenes.
+set /p "INPUT_DIR=Directorio origen: "
+set "INPUT_DIR=%INPUT_DIR:"=%"
+if "%INPUT_DIR%"=="" (
+    echo ERROR: debes ingresar un directorio origen.
     echo.
-    echo ERROR: no existe la carpeta de entrada:
+    goto ASK_INPUT_DIR
+)
+if not exist "%INPUT_DIR%" (
+    echo ERROR: no existe el directorio origen:
     echo "%INPUT_DIR%"
-    pause
-    exit /b 1
+    echo.
+    goto ASK_INPUT_DIR
+)
+
+:ASK_OUTPUT_DIR
+echo.
+echo Ingresa el DIRECTORIO DESTINO para los archivos TIFF corregidos.
+set /p "OUTPUT_DIR=Directorio destino TIFF: "
+set "OUTPUT_DIR=%OUTPUT_DIR:"=%"
+if "%OUTPUT_DIR%"=="" (
+    echo ERROR: debes ingresar un directorio destino para los TIFF.
+    goto ASK_OUTPUT_DIR
+)
+
+:ASK_DEBUG_DIR
+echo.
+echo Ingresa el DIRECTORIO para archivos secundarios.
+echo Aqui se guardaran JPG de control y CSV.
+set /p "DEBUG_DIR=Directorio secundarios: "
+set "DEBUG_DIR=%DEBUG_DIR:"=%"
+if "%DEBUG_DIR%"=="" (
+    echo ERROR: debes ingresar un directorio para archivos secundarios.
+    goto ASK_DEBUG_DIR
 )
 
 if exist "%PROJECT_DIR%tools\exiftool.exe" (
@@ -65,11 +76,14 @@ call ".venv\Scripts\activate.bat"
 python -m pip install -r requirements.txt
 set "PYTHONPATH=%PROJECT_DIR%src;%PYTHONPATH%"
 
+if not exist "%OUTPUT_DIR%" mkdir "%OUTPUT_DIR%"
+if not exist "%DEBUG_DIR%" mkdir "%DEBUG_DIR%"
+
 echo.
 echo Procesando...
-echo Entrada:       "%INPUT_DIR%"
-echo TIFF finales:  "%OUTPUT_DIR%"
-echo Secundarios:   "%DEBUG_DIR%"
+echo Directorio origen:       "%INPUT_DIR%"
+echo Destino TIFF:            "%OUTPUT_DIR%"
+echo Archivos secundarios:    "%DEBUG_DIR%"
 echo.
 
 python -m te263_color_corrector "%INPUT_DIR%" "%OUTPUT_DIR%" ^
