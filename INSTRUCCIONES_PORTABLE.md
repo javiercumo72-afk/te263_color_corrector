@@ -18,6 +18,7 @@
 
 Puedes pegar rutas con o sin comillas. El directorio origen debe existir. Los
 directorios de destino y secundarios se crean automaticamente si no existen.
+Si no quieres cambiar las rutas sugeridas, presiona Enter en las tres preguntas.
 
 ## Perfil ICC y metadatos
 
