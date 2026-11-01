@@ -46,6 +46,15 @@ Procesar una carpeta y continuar si alguna imagen falla:
 te263-correct carpeta_entrada carpeta_salida --recursive --mode hybrid --debug --continue-on-error
 ```
 
+Seleccionar la carta con el raton antes de procesar cada imagen:
+
+```powershell
+te263-correct entrada.tif salida.tif --mode hybrid --debug --manual-chart
+```
+
+Con `--manual-chart` aparece una ventana de seleccion. Arrastra un rectangulo
+que incluya toda la carta TE263 y pulsa Enter; pulsa Esc para cancelar.
+
 Procesar una carpeta dejando TIFF finales en una carpeta y JPG/CSV de diagnostico
 en otra:
 
@@ -58,6 +67,19 @@ Alternativa sin instalar el comando:
 ```powershell
 python -m te263_color_corrector entrada.tif salida.tif --debug
 ```
+
+## Interfaz grafica
+
+En Windows puedes iniciar la interfaz con:
+
+```powershell
+.\ejecutar_te263_gui.bat
+```
+
+Activa `Seleccion manual con raton` para que el programa muestre la ventana de
+seleccion de la carta antes de procesar cada imagen. La interfaz permite elegir
+archivo o carpeta, modo de correccion, carpeta de salida, carpeta de debug y
+perfil ICC.
 
 ## Salidas de debug
 

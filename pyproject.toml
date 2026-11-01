@@ -16,6 +16,7 @@ dependencies = [
 
 [project.scripts]
 te263-correct = "te263_color_corrector.calibrator:main"
+te263-gui = "te263_color_corrector.gui:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]

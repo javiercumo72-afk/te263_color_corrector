@@ -513,37 +513,37 @@ def detect_chart_arrows(chart_rgb: np.ndarray) -> ChartAnchors | None:
     return ChartAnchors((lx, ly, lw, lh), (rx, ry, rw, rh), confidence)
 
 
-def find_chart_corners_from_bright_band(gray: np.ndarray) -> np.ndarray | None:
+def find_chart_corners_from_bright_band(gray: np.ndarray, aggressive: bool = False) -> np.ndarray | None:
     """
     Fallback para casos en los que la pagina y la carta quedan conectadas en el
     umbral binario. Busca una banda brillante inferior, estrecha y alargada.
     """
     h, w = gray.shape[:2]
-    bright = (gray > 120).astype(np.uint8)
+    bright = (gray > (90 if aggressive else 120)).astype(np.uint8)
     row_score = bright.mean(axis=1)
-    active_rows = row_score > 0.20
-    min_band_h = max(40, int(h * 0.012))
+    active_rows = row_score > (0.12 if aggressive else 0.20)
+    min_band_h = max(30 if aggressive else 40, int(h * (0.008 if aggressive else 0.012)))
     row_intervals = intervals_from_mask(active_rows, min_width=min_band_h)
 
     candidates = []
     for y0, y1 in row_intervals:
         band_h = y1 - y0 + 1
-        if y1 < h * 0.55:
+        if y1 < h * (0.35 if aggressive else 0.55):
             continue
-        if float(row_score[y0:y1 + 1].mean()) > 0.75:
+        if float(row_score[y0:y1 + 1].mean()) > (0.90 if aggressive else 0.75):
             continue
 
         pad_y = max(12, int(band_h * 0.12))
         by0 = max(0, y0 - pad_y)
         by1 = min(h - 1, y1 + pad_y)
         band = (bright[by0:by1 + 1] * 255).astype(np.uint8)
-        kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (31, 15))
+        kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (21 if aggressive else 31, 11 if aggressive else 15))
         band = cv2.morphologyEx(band, cv2.MORPH_CLOSE, kernel, iterations=2)
 
         contours, _ = cv2.findContours(band, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
         for cnt in contours:
             area = cv2.contourArea(cnt)
-            if area < 10000:
+            if area < (5000 if aggressive else 10000):
                 continue
             rect = cv2.minAreaRect(cnt)
             (_, _), (rw, rh), _angle = rect
@@ -551,7 +551,7 @@ def find_chart_corners_from_bright_band(gray: np.ndarray) -> np.ndarray | None:
                 rw, rh = rh, rw
             aspect = rw / rh if rh else 0.0
             x, y, bw, bh = cv2.boundingRect(cnt)
-            if 5.0 <= aspect <= 13.5 and bw >= 700 and bh >= 70:
+            if (3.0 if aggressive else 5.0) <= aspect <= (20.0 if aggressive else 13.5) and bw >= (400 if aggressive else 700) and bh >= (40 if aggressive else 70):
                 candidates.append((area, by0, rect))
 
     if not candidates:
@@ -567,25 +567,25 @@ def find_chart_corners_from_bright_band(gray: np.ndarray) -> np.ndarray | None:
 # Detección automática de la carta TE263
 # ============================================================
 
-def find_and_warp_chart(img_rgb: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
+def find_and_warp_chart(img_rgb: np.ndarray, aggressive: bool = False) -> Tuple[np.ndarray, np.ndarray]:
     h, w = img_rgb.shape[:2]
     img8 = as_uint8_rgb(img_rgb)
     gray = cv2.cvtColor(img8, cv2.COLOR_RGB2GRAY)
 
     # La carta suele estar en la parte inferior del escaneo.
-    y_start = int(h * 0.55)
+    y_start = int(h * (0.40 if aggressive else 0.55))
     roi = gray[y_start:h, :]
 
     # Detectar la zona clara de la carta sobre el fondo oscuro.
-    _, th = cv2.threshold(roi, 120, 255, cv2.THRESH_BINARY)
-    kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (31, 15))
+    _, th = cv2.threshold(roi, 95 if aggressive else 120, 255, cv2.THRESH_BINARY)
+    kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (21 if aggressive else 31, 11 if aggressive else 15))
     th = cv2.morphologyEx(th, cv2.MORPH_CLOSE, kernel, iterations=2)
 
     contours, _ = cv2.findContours(th, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
     candidates: List[Tuple[float, np.ndarray]] = []
     for cnt in contours:
         area = cv2.contourArea(cnt)
-        if area < 10000:
+        if area < (5000 if aggressive else 10000):
             continue
         rect = cv2.minAreaRect(cnt)
         (_, _), (rw, rh), _angle = rect
@@ -593,7 +593,7 @@ def find_and_warp_chart(img_rgb: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
             rw, rh = rh, rw
         aspect = rw / rh if rh else 0.0
         x, y, bw, bh = cv2.boundingRect(cnt)
-        if not (5.0 <= aspect <= 13.5 and bw >= 700 and bh >= 70):
+        if not ((3.0 if aggressive else 5.0) <= aspect <= (20.0 if aggressive else 13.5) and bw >= (400 if aggressive else 700) and bh >= (40 if aggressive else 70)):
             continue
 
         box = cv2.boxPoints(rect)
@@ -612,7 +612,7 @@ def find_and_warp_chart(img_rgb: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
     if candidates:
         corners = max(candidates, key=lambda item: item[0])[1]
     else:
-        corners = find_chart_corners_from_bright_band(gray)
+        corners = find_chart_corners_from_bright_band(gray, aggressive=aggressive)
         if corners is None:
             raise RuntimeError(
                 "No se detectó automáticamente la carta TE263. "
@@ -621,10 +621,42 @@ def find_and_warp_chart(img_rgb: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
 
     # Vista canónica. Mantener estable porque los cálculos de ROIs trabajan sobre esta vista.
     chart = level_chart_by_bottom_edge(warp_chart_from_corners(img_rgb, corners))
-    if detect_chart_arrows(chart) is None:
+    if not aggressive and detect_chart_arrows(chart) is None:
         raise RuntimeError(
             "Se encontró una banda compatible con la TE263, pero no se reconocieron las dos flechas extremas."
         )
+    return chart, corners
+
+
+def select_chart_manually(img_rgb: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
+    """Permite seleccionar con el raton el rectangulo que contiene la TE263."""
+    img8 = as_uint8_rgb(img_rgb)
+    h, w = img8.shape[:2]
+    max_w, max_h = 1800, 1100
+    scale = min(1.0, max_w / w, max_h / h)
+    preview = cv2.resize(img8, (max(1, int(round(w * scale))), max(1, int(round(h * scale)))), interpolation=cv2.INTER_AREA)
+
+    window = "Selecciona la carta TE263 y pulsa ENTER (ESC cancela)"
+    cv2.namedWindow(window, cv2.WINDOW_NORMAL)
+    try:
+        x, y, rw, rh = cv2.selectROI(window, preview, showCrosshair=True, fromCenter=False)
+    finally:
+        cv2.destroyWindow(window)
+
+    if rw <= 10 or rh <= 10:
+        raise RuntimeError("Seleccion manual cancelada o demasiado pequena.")
+
+    x0 = max(0, int(round(x / scale)))
+    y0 = max(0, int(round(y / scale)))
+    x1 = min(w, int(round((x + rw) / scale)))
+    y1 = min(h, int(round((y + rh) / scale)))
+    if x1 - x0 <= 10 or y1 - y0 <= 10:
+        raise RuntimeError("La zona manual seleccionada no es valida.")
+
+    corners = np.array([[x0, y0], [x1 - 1, y0], [x1 - 1, y1 - 1], [x0, y1 - 1]], dtype=np.float32)
+    dst = np.array([[0, 0], [2499, 0], [2499, 309], [0, 309]], dtype=np.float32)
+    matrix = cv2.getPerspectiveTransform(corners, dst)
+    chart = cv2.warpPerspective(img_rgb, matrix, (2500, 310), flags=cv2.INTER_CUBIC)
     return chart, corners
 
 
@@ -957,11 +989,16 @@ def process_one(
     debug: bool,
     debug_dir: Path | None = None,
     icc_profile_path: Path | None = DEFAULT_ADOBE_RGB_PROFILE,
+    aggressive_detection: bool = False,
+    manual_chart: bool = False,
 ) -> None:
     dpi = get_dpi(input_path)
     img = read_rgb_image(input_path)
     img, dpi = normalize_image_to_dpi(img, dpi)
-    chart, _corners = find_and_warp_chart(img)
+    if manual_chart:
+        chart, _corners = select_chart_manually(img)
+    else:
+        chart, _corners = find_and_warp_chart(img, aggressive=aggressive_detection)
     rois = generate_patch_rois_auto(chart)
     measured_before = sample_patch_values(chart, rois)
 
@@ -1042,6 +1079,16 @@ def main() -> None:
         action="store_true",
         help="Si se procesa una carpeta, continuar con el resto de imagenes cuando una falle",
     )
+    parser.add_argument(
+        "--aggressive-detection",
+        action="store_true",
+        help="Relajar la deteccion de la carta TE263 para imagenes dificiles; revisar siempre los JPG de debug",
+    )
+    parser.add_argument(
+        "--manual-chart",
+        action="store_true",
+        help="Seleccionar con el raton el rectangulo de la carta TE263 antes de procesar cada imagen",
+    )
     args = parser.parse_args()
 
     if not args.input.exists():
@@ -1079,6 +1126,8 @@ def main() -> None:
                     args.debug,
                     debug_dir=image_debug_dir,
                     icc_profile_path=args.icc_profile,
+                    aggressive_detection=args.aggressive_detection,
+                    manual_chart=args.manual_chart,
                 )
                 success_count += 1
             except Exception as exc:
@@ -1105,6 +1154,8 @@ def main() -> None:
             args.debug,
             debug_dir=args.debug_dir,
             icc_profile_path=args.icc_profile,
+            aggressive_detection=args.aggressive_detection,
+            manual_chart=args.manual_chart,
         )
 
 
